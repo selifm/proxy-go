@@ -47,6 +47,7 @@ func (c *client) Read() {
 			}
 			fmt.Println("读取出现错误...")
 			c.exit <- err
+			runtime.Goexit()
 		}
 
 		// 收到心跳包,则跳过
@@ -66,6 +67,7 @@ func (c *client) Write() {
 			_, err := c.conn.Write(data)
 			if err != nil && err != io.EOF {
 				c.exit <- err
+				runtime.Goexit()
 			}
 		}
 	}
@@ -88,6 +90,8 @@ func (u *user) Read() {
 		n, err := u.conn.Read(data)
 		if err != nil && err != io.EOF {
 			u.exit <- err
+			_ = u.conn.Close()
+			runtime.Goexit()
 		}
 		u.read <- data[:n]
 	}
@@ -101,6 +105,8 @@ func (u *user) Write() {
 			_, err := u.conn.Write(data)
 			if err != nil && err != io.EOF {
 				u.exit <- err
+				_ = u.conn.Close()
+				runtime.Goexit()
 			}
 		}
 	}
@@ -146,7 +152,7 @@ func main() {
 		}
 
 		userConnChan := make(chan net.Conn)
-		go AcceptUserConn(userListener, userConnChan)
+		go AcceptUserConn(userListener, userConnChan) //由用户连接后，将用户连接存在userConnChan
 
 		go HandleClient(client, userConnChan)
 
@@ -206,6 +212,7 @@ func handle(client *client, user *user) {
 		case err := <-user.exit:
 			fmt.Println("user出现错误，关闭连接", err.Error())
 			_ = user.conn.Close()
+			runtime.Goexit()
 		}
 	}
 }
