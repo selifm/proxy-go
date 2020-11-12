@@ -194,6 +194,8 @@ func handle(client *client, user *user) {
 		}
 		if client.conn == nil {
 			fmt.Println("client失去连接，等待连接")
+			user.write <- []byte("client 失去连接，5s后重试")
+			time.Sleep(time.Duration(5) * time.Second)
 			continue
 		}
 		select {
