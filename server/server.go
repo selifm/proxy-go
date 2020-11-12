@@ -27,6 +27,8 @@ type client struct {
 	write chan []byte
 	// 异常退出通道
 	exit chan error
+	// 重连
+	reConn chan bool
 }
 
 // 从Client端读取数据
@@ -84,9 +86,6 @@ type user struct {
 	exit chan error
 }
 
-// 重连通道
-var userReConn chan bool
-
 // 从User端读取数据
 func (u *user) Read() {
 	for {
@@ -143,12 +142,16 @@ func main() {
 	fmt.Printf("监听:%d端口, 服务已开启... \n", localPort)
 
 	client := &client{
-		conn:  nil,
-		read:  make(chan []byte),
-		write: make(chan []byte),
-		exit:  make(chan error),
+		conn:   nil,
+		read:   make(chan []byte),
+		write:  make(chan []byte),
+		exit:   make(chan error),
+		reConn: make(chan bool),
 	}
 	//接收被透传的client请求
+	go func() {
+		client.reConn <- true
+	}()
 	go client.Read()
 	go client.Write()
 	//接收客户端请求
@@ -210,8 +213,9 @@ func handle(client *client, user *user) {
 			fmt.Println("client出现错误, 关闭连接", err.Error())
 			if client.conn != nil {
 				_ = client.conn.Close()
-				client.conn = nil
 			}
+			client.conn = nil
+			client.reConn <- true
 		case err := <-user.exit:
 			fmt.Println("user出现错误，关闭连接", err.Error())
 			if user.conn != nil {
@@ -226,18 +230,20 @@ func handle(client *client, user *user) {
 // 等待user连接
 func AcceptClientConn(clientListener net.Listener, client *client) {
 	for {
-		if clientListener == nil {
-			continue
+		v, ok := <-client.reConn
+		if ok && v == true {
+			// 接收client 连接
+			clientConn, err := clientListener.Accept()
+			if err == nil {
+				client.conn = clientConn
+				fmt.Printf("Client connect: %s \n", clientConn.RemoteAddr())
+			} else {
+				go func() {
+					client.reConn <- true
+				}()
+			}
 		}
-		// 接收client 连接
-		clientConn, err := clientListener.Accept()
-		if err != nil {
-			panic(err)
-		}
-		client.conn = clientConn
-		fmt.Printf("有Client连接: %s \n", clientConn.RemoteAddr())
 	}
-
 }
 
 // 等待user连接
