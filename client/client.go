@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -29,15 +28,16 @@ type server struct {
 	write chan []byte
 	// 异常退出通道
 	exit chan error
-	// 重连通道
-	reConn chan bool
 }
 
 // 从Server端读取数据
 func (s *server) Read() {
-	// 如果10秒钟内没有消息传输，则Read函数会返回一个timeout的错误
-	_ = s.conn.SetReadDeadline(time.Now().Add(time.Second * 10))
 	for {
+		if s.conn == nil {
+			continue
+		}
+		// 如果10秒钟内没有消息传输，则Read函数会返回一个timeout的错误
+		_ = s.conn.SetReadDeadline(time.Now().Add(time.Second * 10))
 		data := make([]byte, 10240)
 		n, err := s.conn.Read(data)
 		if err != nil && err != io.EOF {
@@ -50,7 +50,6 @@ func (s *server) Read() {
 			}
 			fmt.Println("从server读取数据失败, ", err.Error())
 			s.exit <- err
-			runtime.Goexit()
 		}
 
 		// 如果收到心跳包, 则跳过
@@ -65,6 +64,9 @@ func (s *server) Read() {
 // 将数据写入到Server端
 func (s *server) Write() {
 	for {
+		if s.conn == nil {
+			continue
+		}
 		select {
 		case data := <-s.write:
 			_, err := s.conn.Write(data)
@@ -87,6 +89,9 @@ type local struct {
 func (l *local) Read() {
 
 	for {
+		if l.conn == nil {
+			continue
+		}
 		data := make([]byte, 10240)
 		n, err := l.conn.Read(data)
 		if err != nil {
@@ -98,6 +103,9 @@ func (l *local) Read() {
 
 func (l *local) Write() {
 	for {
+		if l.conn == nil {
+			continue
+		}
 		select {
 		case data := <-l.write:
 			_, err := l.conn.Write(data)
@@ -110,56 +118,71 @@ func (l *local) Write() {
 
 func main() {
 	flag.Parse()
-
-	target := net.JoinHostPort(host, fmt.Sprintf("%d", remotePort))
-	for {
-		serverConn, err := net.Dial("tcp", target)
-		if err != nil {
-			panic(err)
-		}
-
-		fmt.Printf("已连接server: %s \n", serverConn.RemoteAddr())
-		server := &server{
-			conn:   serverConn,
-			read:   make(chan []byte),
-			write:  make(chan []byte),
-			exit:   make(chan error),
-			reConn: make(chan bool),
-		}
-
-		go server.Read()
-		go server.Write()
-
-		go handle(server)
-
-		<-server.reConn
-		_ = server.conn.Close()
-	}
-
-}
-
-func handle(server *server) {
-	// 等待server端发来的信息，也就是说user来请求server了
-	data := <-server.read
-
-	localConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
-	if err != nil {
-		panic(err)
-	}
-
-	local := &local{
-		conn:  localConn,
+	//连接远程服务
+	server := &server{
+		conn:  nil,
 		read:  make(chan []byte),
 		write: make(chan []byte),
 		exit:  make(chan error),
 	}
-
+	go getServerConn(server)
+	go server.Read()
+	go server.Write()
+	//连接本地服务
+	local := &local{
+		conn:  nil,
+		read:  make(chan []byte),
+		write: make(chan []byte),
+		exit:  make(chan error),
+	}
+	go getLocalConn(local)
 	go local.Read()
 	go local.Write()
+	//远程服务和本地服务交互
+	go handle(server, local)
 
-	local.write <- data
+	re := make(chan int64)
+	<-re
+}
 
+func getServerConn(server *server) {
 	for {
+		if server.conn != nil {
+			time.Sleep(time.Duration(5) * time.Second)
+			continue
+		}
+		serverConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", host, remotePort))
+		if err == nil {
+			server.conn = serverConn
+			fmt.Printf("已连接server: %s \n", serverConn.RemoteAddr())
+		}
+
+	}
+
+}
+
+func getLocalConn(local *local) {
+	for {
+		if local.conn != nil {
+			time.Sleep(time.Duration(5) * time.Second)
+			continue
+		}
+		localConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
+		if err == nil {
+			local.conn = localConn
+			fmt.Printf("已连接本地server: %s \n", localConn.RemoteAddr())
+		}
+
+	}
+
+}
+
+func handle(server *server, local *local) {
+	for {
+		if server.conn == nil || local.conn == nil {
+			time.Sleep(time.Duration(5) * time.Second)
+			continue
+		}
 		select {
 		case data := <-server.read:
 			local.write <- data
@@ -169,13 +192,16 @@ func handle(server *server) {
 
 		case err := <-server.exit:
 			fmt.Printf("server have err: %s", err.Error())
-			_ = server.conn.Close()
-			_ = local.conn.Close()
-			server.reConn <- true
-
+			if server.conn != nil {
+				_ = server.conn.Close()
+				server.conn = nil
+			}
 		case err := <-local.exit:
 			fmt.Printf("server have err: %s", err.Error())
-			_ = local.conn.Close()
+			if local.conn != nil {
+				_ = local.conn.Close()
+				local.conn = nil
+			}
 		}
 	}
 }
