@@ -27,8 +27,6 @@ type client struct {
 	write chan []byte
 	// 异常退出通道
 	exit chan error
-	// 重连通道
-	reConn chan bool
 }
 
 // 从Client端读取数据
@@ -136,55 +134,42 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("监听:%d端口, 等待client连接... \n", remotePort)
+	fmt.Printf("监听:%d端口,服务已开启... \n", remotePort)
 	// 监听User来连接
 	userListener, err := net.Listen("tcp", fmt.Sprintf(":%d", localPort))
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("监听:%d端口, 等待user连接.... \n", localPort)
+	fmt.Printf("监听:%d端口, 服务已开启... \n", localPort)
 
 	client := &client{
-		conn:   nil,
-		read:   make(chan []byte),
-		write:  make(chan []byte),
-		exit:   make(chan error),
-		reConn: make(chan bool),
+		conn:  nil,
+		read:  make(chan []byte),
+		write: make(chan []byte),
+		exit:  make(chan error),
 	}
 	//接收被透传的client请求
 	go client.Read()
 	go client.Write()
+	//接收客户端请求
+	fmt.Println("等待client连接..")
+	go AcceptClientConn(clientListener, client)
+	fmt.Println("等待user连接..")
 	//接收用户请求
 	userConnChan := make(chan net.Conn)
 	go AcceptUserConn(userListener, userConnChan) //由用户连接后，将用户连接存在userConnChan
-	for {
-		// 有Client来连接了
-		clientConn, err := clientListener.Accept()
-		if err != nil {
-			panic(err)
-		}
-		client.conn = clientConn
-		fmt.Printf("有Client连接: %s \n", clientConn.RemoteAddr())
+	go HandleClient(client, userConnChan)
 
-		go HandleClient(client, userConnChan)
-
-		<-client.reConn
-		fmt.Println("重新等待新的client连接..")
-	}
+	re := make(chan int64)
+	<-re
 }
 
 func HandleClient(client *client, userConnChan chan net.Conn) {
 	for {
+		if client.conn == nil {
+			continue
+		}
 		select {
-		case err := <-client.exit:
-			fmt.Printf("client出现错误, 开始重试, err: %s \n", err.Error())
-			client.reConn <- true
-			if client.conn != nil {
-				_ = client.conn.Close()
-				client.conn = nil
-			}
-			runtime.Goexit()
-
 		case userConn := <-userConnChan:
 			user := &user{
 				conn:  userConn,
@@ -194,7 +179,6 @@ func HandleClient(client *client, userConnChan chan net.Conn) {
 			}
 			go user.Read()
 			go user.Write()
-
 			go handle(client, user)
 		}
 	}
@@ -207,6 +191,10 @@ func handle(client *client, user *user) {
 	for {
 		if user.conn == nil {
 			break
+		}
+		if client.conn == nil {
+			fmt.Println("client失去连接，等待连接")
+			continue
 		}
 		select {
 		case userRecv := <-user.read:
@@ -222,14 +210,6 @@ func handle(client *client, user *user) {
 				_ = client.conn.Close()
 				client.conn = nil
 			}
-			if user.conn != nil {
-				_ = user.conn.Close()
-				user.conn = nil
-			}
-			client.reConn <- true
-			// 结束当前goroutine
-			runtime.Goexit()
-
 		case err := <-user.exit:
 			fmt.Println("user出现错误，关闭连接", err.Error())
 			if user.conn != nil {
@@ -239,6 +219,23 @@ func handle(client *client, user *user) {
 			runtime.Goexit()
 		}
 	}
+}
+
+// 等待user连接
+func AcceptClientConn(clientListener net.Listener, client *client) {
+	for {
+		if clientListener == nil {
+			continue
+		}
+		// 接收client 连接
+		clientConn, err := clientListener.Accept()
+		if err != nil {
+			panic(err)
+		}
+		client.conn = clientConn
+		fmt.Printf("有Client连接: %s \n", clientConn.RemoteAddr())
+	}
+
 }
 
 // 等待user连接
