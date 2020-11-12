@@ -28,6 +28,8 @@ type server struct {
 	write chan []byte
 	// 异常退出通道
 	exit chan error
+	// 重新获取连接
+	reconn chan bool
 }
 
 // 从Server端读取数据
@@ -84,6 +86,8 @@ type local struct {
 	write chan []byte
 	// 有异常退出通道
 	exit chan error
+	// 重新获取连接
+	reconn chan bool
 }
 
 func (l *local) Read() {
@@ -120,24 +124,38 @@ func main() {
 	flag.Parse()
 	//连接远程服务
 	server := &server{
-		conn:  nil,
-		read:  make(chan []byte),
-		write: make(chan []byte),
-		exit:  make(chan error),
+		conn:   nil,
+		read:   make(chan []byte),
+		write:  make(chan []byte),
+		exit:   make(chan error),
+		reconn: make(chan bool),
 	}
+
+	go func() {
+		server.reconn <- true
+	}()
+
 	go getServerConn(server)
 	go server.Read()
 	go server.Write()
+
 	//连接本地服务
 	local := &local{
-		conn:  nil,
-		read:  make(chan []byte),
-		write: make(chan []byte),
-		exit:  make(chan error),
+		conn:   nil,
+		read:   make(chan []byte),
+		write:  make(chan []byte),
+		exit:   make(chan error),
+		reconn: make(chan bool),
 	}
+
+	go func() {
+		local.reconn <- true
+	}()
+
 	go getLocalConn(local)
 	go local.Read()
 	go local.Write()
+
 	//远程服务和本地服务交互
 	go handle(server, local)
 
@@ -147,34 +165,35 @@ func main() {
 
 func getServerConn(server *server) {
 	for {
-		if server.conn != nil {
-			time.Sleep(time.Duration(5) * time.Second)
-			continue
+		v, ok := <-server.reconn
+		if ok && v == true {
+			serverConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", host, remotePort))
+			if err == nil {
+				server.conn = serverConn
+				fmt.Printf("已连接server: %s \n", serverConn.RemoteAddr())
+			} else {
+				//连接失败，继续连接
+				server.reconn <- true
+			}
 		}
-		serverConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", host, remotePort))
-		if err == nil {
-			server.conn = serverConn
-			fmt.Printf("已连接server: %s \n", serverConn.RemoteAddr())
-		}
-
 	}
-
 }
 
 func getLocalConn(local *local) {
 	for {
-		if local.conn != nil {
-			time.Sleep(time.Duration(5) * time.Second)
-			continue
-		}
-		localConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
-		if err == nil {
-			local.conn = localConn
-			fmt.Printf("已连接本地server: %s \n", localConn.RemoteAddr())
+		v, ok := <-local.reconn
+		if ok && v == true {
+			localConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
+			if err == nil {
+				local.conn = localConn
+				fmt.Printf("已连接本地server: %s \n", localConn.RemoteAddr())
+			} else {
+				//连接失败，继续连接
+				local.reconn <- true
+			}
 		}
 
 	}
-
 }
 
 func handle(server *server, local *local) {
@@ -191,17 +210,19 @@ func handle(server *server, local *local) {
 			server.write <- data
 
 		case err := <-server.exit:
-			fmt.Printf("server have err: %s", err.Error())
 			if server.conn != nil {
 				_ = server.conn.Close()
-				server.conn = nil
 			}
-		case err := <-local.exit:
+			server.conn = nil
+			server.reconn <- true
 			fmt.Printf("server have err: %s", err.Error())
+		case err := <-local.exit:
 			if local.conn != nil {
 				_ = local.conn.Close()
-				local.conn = nil
 			}
+			local.conn = nil
+			local.reconn <- true
+			fmt.Printf("server have err: %s", err.Error())
 		}
 	}
 }
