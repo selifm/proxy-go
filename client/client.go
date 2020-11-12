@@ -172,8 +172,11 @@ func getServerConn(server *server) {
 				server.conn = serverConn
 				fmt.Printf("已连接server: %s \n", serverConn.RemoteAddr())
 			} else {
+				fmt.Printf("已连接server FAIL: %s \n", err)
 				//连接失败，继续连接
-				server.reconn <- true
+				go func() {
+					server.reconn <- true
+				}()
 			}
 		}
 	}
@@ -188,8 +191,11 @@ func getLocalConn(local *local) {
 				local.conn = localConn
 				fmt.Printf("已连接本地server: %s \n", localConn.RemoteAddr())
 			} else {
+				fmt.Printf("已连接本地server FAIL: %s \n", err)
 				//连接失败，继续连接
-				local.reconn <- true
+				go func() {
+					local.reconn <- true
+				}()
 			}
 		}
 
@@ -222,7 +228,7 @@ func handle(server *server, local *local) {
 			}
 			local.conn = nil
 			local.reconn <- true
-			fmt.Printf("server have err: %s", err.Error())
+			fmt.Printf("local have err: %s", err.Error())
 		}
 	}
 }
