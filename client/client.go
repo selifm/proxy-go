@@ -96,9 +96,11 @@ func (l *local) Read() {
 		if l.conn == nil {
 			continue
 		}
+		// 如果10秒钟内没有消息传输，则Read函数会返回一个timeout的错误
+		_ = l.conn.SetReadDeadline(time.Now().Add(time.Second * 10))
 		data := make([]byte, 10240)
 		n, err := l.conn.Read(data)
-		if err != nil {
+		if err != nil && err != io.EOF {
 			l.exit <- err
 		}
 		l.read <- data[:n]
