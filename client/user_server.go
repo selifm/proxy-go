@@ -17,28 +17,28 @@ type myLocalServer struct {
 }
 
 // 从User端读取数据
-func (u *myLocalServer) Read() {
-	_ = u.conn.SetReadDeadline(time.Now().Add(time.Second * 200))
+func (myLoca *myLocalServer) Read() {
+	_ = myLoca.conn.SetReadDeadline(time.Now().Add(time.Second * 200))
 	for {
 		data := make([]byte, 10240)
-		n, err := u.conn.Read(data)
+		n, err := myLoca.conn.Read(data)
 		if err != nil && err != io.EOF {
-			u.exit <- err
+			myLoca.exit <- err
 		}
-		u.read <- data[:n]
+		myLoca.read <- data[:n]
 	}
 }
 
 // 将数据写给User端
-func (u *myLocalServer) Write() {
+func (myLoca *myLocalServer) Write() {
 	for {
 		select {
-		case data := <-u.read:
+		case data := <-myLoca.read:
 			var str string = fmt.Sprintf("收到你的信息：%s,我给你返回响应%s", data, time.Now().String())
 			var repData []byte = []byte(str)
-			_, err := u.conn.Write(repData)
+			_, err := myLoca.conn.Write(repData)
 			if err != nil && err != io.EOF {
-				u.exit <- err
+				myLoca.exit <- err
 			}
 		}
 	}
